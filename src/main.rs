@@ -3,6 +3,9 @@ extern crate bytes;
 extern crate futures;
 extern crate mio;
 extern crate tokio;
+#[macro_use]
+extern crate tokio_io;
+extern crate nonblock;
 
 mod input_stream;
 
@@ -11,6 +14,8 @@ use mio::{Evented, Poll, PollOpt, Ready, Token};
 
 use tokio::reactor::PollEvented2;
 use tokio::prelude::*;
+use tokio_io::codec::*;
+use tokio_io::io::read;
 
 use futures::sync::mpsc::*;
 
@@ -25,6 +30,8 @@ use std::string::*;
 
 use input_stream::*;
 
+use bytes::*;
+
 fn main() {
     let in_e = PollEvented2::new(AsyncStdin::new());
     let out_e = PollEvented2::new(AsyncStdout::new());
@@ -38,18 +45,24 @@ fn main() {
     let stream_two = tick()
         .map(|x| String::from("TICK"))
         .map_err(|e| eprintln!("Error"));
-    //    let merged = stream_one.select(stream_two).for_each(|v| {
-    //        println!("{}", v);
-    //        Ok(())
-    //    });
-    let first = stream_one.for_each(|val| {
-        println!("{}{}", val, val);
+    let merged = stream_one.select(stream_two).for_each(|v| {
+        println!("{}", v);
         Ok(())
     });
-    let fut = mycopy(in_e, out_e)
-        .for_each(|i| Ok(()))
-        .map_err(|e| eprintln!("{}", e));
-    tokio::run(fut);
+    //    let first = stream_one.for_each(|val| {
+    //        println!("{}{}", val, val);
+    //        Ok(())
+    //    });
+    //    let fut = mycopy(in_e, out_e)
+    //        .for_each(|i| Ok(()))
+    //        .map_err(|e| eprintln!("{}", e));
+    //    let fut = FramedRead::new(in_e, BytesCodec::new())
+    //        .for_each(|v| {
+    //            println!("{:?}", v);
+    //            Ok(())
+    //        })
+    //        .map_err(|e| eprintln!("{}", e));
+    tokio::run(merged);
 }
 
 fn tick() -> Receiver<i32> {

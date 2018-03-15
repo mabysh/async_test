@@ -1,9 +1,12 @@
 extern crate mio;
+extern crate nonblock;
 extern crate tokio;
 //extern crate bytes;
 
 use mio::unix::EventedFd;
 use mio::{Evented, Poll, PollOpt, Ready, Token};
+
+use nonblock::*;
 
 use tokio::prelude::*;
 use tokio::reactor::*;
@@ -17,19 +20,27 @@ use std::io;
 use std::io::{Read, Stdin};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::mem;
+use std::fmt::*;
+use std::fmt;
 
-#[derive(Debug)]
 pub struct AsyncStdin {
-    inner: Stdin,
+    inner: NonBlockingReader<Stdin>,
     fd: RawFd,
+}
+
+impl Debug for AsyncStdin {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.pad("AsyncStdin { .. }")
+    }
 }
 
 impl AsyncStdin {
     pub fn new() -> AsyncStdin {
         let stdin = ::std::io::stdin();
         let fd = AsRawFd::as_raw_fd(&stdin);
+        let reader = NonBlockingReader::from_fd(stdin).unwrap();
         AsyncStdin {
-            inner: stdin,
+            inner: reader,
             fd: fd,
         }
     }
@@ -63,7 +74,7 @@ impl Evented for AsyncStdin {
 
 impl Read for AsyncStdin {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.inner.read(buf)
+        self.inner.read_available(buf)
     }
     fn read_to_end(&mut self, buf: &mut Vec<u8>) -> io::Result<usize> {
         self.inner.read_to_end(buf)
@@ -95,34 +106,20 @@ impl Stream for InputStream {
 
     fn poll(&mut self) -> futures::Poll<Option<BytesMut>, io::Error> {
         println!("poll method");
-        let readiness = self.io.poll_read_ready(mio::Ready::readable());
-        match readiness {
-            Ok(r) => match r {
-                futures::Async::Ready(i) => {
-                    println!("before read");
-                    let b = try_ready!(self.io.poll_read(&mut self.buf));
-                    if b == 0 && self.buf.len() == 0 {
-                        println!("1");
-                        return Ok(None.into());
-                    }
-                    println!("2");
-                    return Ok(
-                        Some(mem::replace(&mut self.buf, BytesMut::with_capacity(256))).into(),
-                    );
+        match try_nb!(self.io.read_buf(&mut self.buf)) {
+            futures::Async::Ready(i) => {
+                if i == 0 && self.buf.len() == 0 {
+                    println!("eof");
+                    return Ok(None.into());
                 }
-                futures::Async::NotReady => {
-                    println!("not ready");
-                    self.io.clear_read_ready(mio::Ready::readable());
-                    return Ok(Async::NotReady);
-                }
-            },
-            Err(e) => return Err(From::from(e)),
+                println!("read ok");
+                return Ok(Some(mem::replace(&mut self.buf, BytesMut::with_capacity(256))).into());
+            }
+            futures::Async::NotReady => {
+                println!("not ready");
+                return Ok(Async::NotReady);
+            }
         }
-        let n = try_ready!(self.io.poll_read(&mut self.buf));
-        if n == 0 && self.buf.len() == 0 {
-            return Ok(None.into());
-        }
-        Ok(Some(mem::replace(&mut self.buf, BytesMut::with_capacity(256))).into())
     }
 }
 
